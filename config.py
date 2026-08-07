@@ -9,12 +9,12 @@
 # --- Telegram Bot Token ---
 # Jab aap BotFather se bot banayenge tab aapko ek "token" milega.
 # Wo token neeche paste karna hai. (Quotes ke andar rakho)
-TELEGRAM_BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+TELEGRAM_BOT_TOKEN = "8826997291:AAHVew4uPHpJnAJRKhzFcmWY_LL8vhmigaE"
 
 # --- Telegram Chat ID ---
 # Ye aapke Telegram account / group ki unique ID hai.
 # Isko aap @userinfobot ya @RawDataBot se nikal sakte ho.
-TELEGRAM_CHAT_ID = "PASTE_YOUR_CHAT_ID_HERE"
+TELEGRAM_CHAT_ID = "5891462320"
 
 # --- Kitni baar scan karna hai (seconds me) ---
 # 15 minute = 900 seconds. Har 900 second pe bot naye top 5 coins bhejega.
@@ -39,4 +39,4 @@ KLINE_LIMIT = 30   # last 30 fifteen-minute candles
 # --- Safe mode (testing ke liye) ---
 # Agar True hai to bot Telegram pe message nahi bhejega,
 # sirf terminal me print karega. Pehli baar True rakho.
-DRY_RUN = True
+DRY_RUN = False
