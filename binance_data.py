@@ -1,107 +1,255 @@
 # ============================================================
-# binance_data.py - BINANCE SE DATA LANA
+# binance_data.py
 # ------------------------------------------------------------
-# Ye file Binance ki public API se:
-#   1. Saari USDT trading pairs ki list laati hai
-#   2. Sabka 24hr ticker data laati hai (volume, price change)
-#   3. Top candidates ke liye 15-min candles laati hai
+# Binance USDT Futures se market data lene ke functions
 # ============================================================
 
-import requests
 import time
+import requests
 import pandas as pd
-from config import BINANCE_BASE_URL, KLINE_LIMIT
 
 
-def _get(url, params=None, retries=3):
-    """Request bhejta hai aur agar fail ho to dobara try karta hai."""
+BASE_URL = "https://fapi.binance.com"
+
+
+# ============================================================
+# BINANCE API REQUEST
+# ============================================================
+
+def binance_request(endpoint, params=None, retries=3):
+    """Binance Futures API se data fetch karta hai."""
+
+    url = BASE_URL + endpoint
+
     for attempt in range(retries):
+
         try:
-            r = requests.get(url, params=params, timeout=15)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[warn] API call fail (try {attempt+1}/{retries}): {e}")
-            time.sleep(2)
+
+            response = requests.get(
+                url,
+                params=params,
+                timeout=20
+            )
+
+            response.raise_for_status()
+
+            return response.json()
+
+        except Exception as error:
+
+            print(
+                f"[WARN] Binance API error "
+                f"(attempt {attempt + 1}/{retries}): {error}"
+            )
+
+            if attempt < retries - 1:
+                time.sleep(2)
+
     return None
 
 
+# ============================================================
+# GET USDT FUTURES SYMBOLS
+# ============================================================
+
 def get_usdt_symbols():
     """
-    Saari USDT trading pairs ki list laati hai.
-    Example return: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', ...]
+    Binance USDT-M Futures ke active USDT symbols return karta hai.
     """
-    url = f"{BINANCE_BASE_URL}/api/v3/exchangeInfo"
-    data = _get(url)
+
+    data = binance_request("/fapi/v1/exchangeInfo")
+
     if not data:
         return []
 
     symbols = []
-    for s in data.get("symbols", []):
-        # hum sirf ACTIVE USDT SPOT pairs lenge (margin/futures nahi)
-        if (s.get("status") == "TRADING"
-                and s.get("isSpotTradingAllowed", False)
-                and s.get("quoteAsset") == "USDT"):
-            symbols.append(s["symbol"])
-    # Stablecoins / leveraged tokens hatado - ye "movement" wale analysis
-    # ke liye meaningful nahi hote (USDC, BUSD, USDT, leveraged tokens).
-    BAD = ("USDCUSDT", "BUSDUSDT", "TUSDUSDT", "FDUSDUSDT", "EURUSDT")
-    # leveraged tokens ka pattern: UP/DOWN/BULL/BEAR + USDT
-    import re
-    BAD += tuple(sym for sym in symbols if re.search(r"(UP|DOWN|BULL|BEAR)USDT$", sym))
-    symbols = [s for s in symbols if s not in BAD]
+
+    for item in data.get("symbols", []):
+
+        try:
+
+            if (
+                item.get("quoteAsset") == "USDT"
+                and item.get("status") == "TRADING"
+                and item.get("contractType") == "PERPETUAL"
+            ):
+
+                symbols.append(
+                    item["symbol"]
+                )
+
+        except Exception:
+            continue
+
     return symbols
 
 
-def get_24h_tickers(symbols):
-    """
-    Sabhi symbols ka 24hr market data ek hi batch call me laati hai.
-    Returns: pandas DataFrame
-    Columns: symbol, lastPrice, priceChangePercent, volume, quoteVolume
-    """
-    url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr"
-    out = []
-    # Binance ki limit ~100 symbols per call, to hum batch me bhejenge
-    BATCH = 80
-    for i in range(0, len(symbols), BATCH):
-        chunk = symbols[i:i + BATCH]
-        # Binance ko symbols JSON array format me bhejna hota hai
-        params = {"symbols": "[" + ",".join(f'"{s}"' for s in chunk) + "]"}
-        data = _get(url, params=params)
-        if not data:
-            continue
-        for item in data:
-            out.append({
-                "symbol": item["symbol"],
-                "lastPrice": float(item["lastPrice"]),
-                "priceChangePercent": float(item["priceChangePercent"]),
-                "volume": float(item["volume"]),
-                "quoteVolume": float(item["quoteVolume"]),  # USDT volume
-                "highPrice": float(item["highPrice"]),
-                "lowPrice": float(item["lowPrice"]),
-                "count": int(item["count"]),  # number of trades
-            })
-        # Binance API respectful rehna chahiye - thoda rukke
-        time.sleep(0.2)
-    return pd.DataFrame(out)
+# ============================================================
+# GET 24H TICKERS
+# ============================================================
 
+def get_24h_tickers(symbols=None):
+    """
+    Binance Futures ke 24H ticker data ko DataFrame me return karta hai.
+    """
 
-def get_klines(symbol, interval="15m", limit=KLINE_LIMIT):
-    """
-    Ek particular symbol ke liye recent candles (klines) laati hai.
-    Returns: pandas DataFrame with columns
-        open_time, open, high, low, close, volume, close_time
-    """
-    url = f"{BINANCE_BASE_URL}/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    data = _get(url, params=params)
+    data = binance_request("/fapi/v1/ticker/24hr")
+
     if not data:
         return pd.DataFrame()
-    df = pd.DataFrame(data, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_volume", "trades", "taker_buy_base",
-        "taker_buy_quote", "ignore"
-    ])
-    for col in ["open", "high", "low", "close", "volume", "quote_volume"]:
-        df[col] = df[col].astype(float)
+
+    rows = []
+
+    allowed_symbols = set(symbols) if symbols else None
+
+    for item in data:
+
+        try:
+
+            symbol = item.get("symbol")
+
+            if allowed_symbols is not None:
+                if symbol not in allowed_symbols:
+                    continue
+
+            rows.append(
+                {
+                    "symbol": symbol,
+
+                    "lastPrice": float(
+                        item.get("lastPrice", 0)
+                    ),
+
+                    "priceChangePercent": float(
+                        item.get(
+                            "priceChangePercent",
+                            0
+                        )
+                    ),
+
+                    "quoteVolume": float(
+                        item.get(
+                            "quoteVolume",
+                            0
+                        )
+                    ),
+
+                    "count": int(
+                        item.get(
+                            "count",
+                            0
+                        )
+                    ),
+
+                    "highPrice": float(
+                        item.get(
+                            "highPrice",
+                            0
+                        )
+                    ),
+
+                    "lowPrice": float(
+                        item.get(
+                            "lowPrice",
+                            0
+                        )
+                    ),
+
+                    "volume": float(
+                        item.get(
+                            "volume",
+                            0
+                        )
+                    ),
+                }
+            )
+
+        except Exception as error:
+
+            print(
+                f"[WARN] Ticker parse failed: {error}"
+            )
+
+            continue
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
     return df
+
+
+# ============================================================
+# GET KLINES
+# ============================================================
+
+def get_klines(
+    symbol,
+    interval="15m",
+    limit=100
+):
+    """
+    Kisi symbol ke historical candles return karta hai.
+    """
+
+    data = binance_request(
+        "/fapi/v1/klines",
+        params={
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+        }
+    )
+
+    if not data:
+        return pd.DataFrame()
+
+    columns = [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "trades",
+        "taker_buy_base",
+        "taker_buy_quote",
+        "ignore",
+    ]
+
+    try:
+
+        df = pd.DataFrame(
+            data,
+            columns=columns
+        )
+
+        numeric_columns = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "quote_volume",
+        ]
+
+        for column in numeric_columns:
+
+            df[column] = pd.to_numeric(
+                df[column],
+                errors="coerce"
+            )
+
+        return df
+
+    except Exception as error:
+
+        print(
+            f"[WARN] Kline parsing failed "
+            f"for {symbol}: {error}"
+        )
+
+        return pd.DataFrame()
