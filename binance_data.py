@@ -1,7 +1,15 @@
 # ============================================================
 # binance_data.py
 # ------------------------------------------------------------
-# Binance USDT Futures se market data lene ke functions
+# Binance USD-M Futures market data
+#
+# Primary endpoint:
+#   fapi.binance.com
+#
+# Failover:
+#   fapi1.binance.com
+#   fapi2.binance.com
+#   fapi3.binance.com
 # ============================================================
 
 import time
@@ -9,43 +17,246 @@ import requests
 import pandas as pd
 
 
-BASE_URL = "https://fapi.binance.com"
+# ============================================================
+# BINANCE FUTURES ENDPOINTS
+# ============================================================
+
+BASE_URLS = [
+    "https://fapi.binance.com",
+    "https://fapi1.binance.com",
+    "https://fapi2.binance.com",
+    "https://fapi3.binance.com",
+]
+
+
+# Currently working endpoint
+ACTIVE_BASE_URL = None
 
 
 # ============================================================
-# BINANCE API REQUEST
+# SESSION
 # ============================================================
 
-def binance_request(endpoint, params=None, retries=3):
-    """Binance Futures API se data fetch karta hai."""
+SESSION = requests.Session()
 
-    url = BASE_URL + endpoint
+SESSION.headers.update(
+    {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/131.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+)
 
-    for attempt in range(retries):
 
-        try:
+# ============================================================
+# BINANCE REQUEST
+# ============================================================
 
-            response = requests.get(
-                url,
-                params=params,
-                timeout=20
-            )
+def binance_request(
+    endpoint,
+    params=None,
+    retries=2
+):
+    """
+    Binance Futures API request.
 
-            response.raise_for_status()
+    Agar ek endpoint 451/403/5xx de,
+    to automatically next endpoint try karega.
+    """
 
-            return response.json()
+    global ACTIVE_BASE_URL
 
-        except Exception as error:
+    # --------------------------------------------------------
+    # Agar pehle koi endpoint successfully kaam kar chuka hai
+    # to usko pehle try karo.
+    # --------------------------------------------------------
 
-            print(
-                f"[WARN] Binance API error "
-                f"(attempt {attempt + 1}/{retries}): {error}"
-            )
+    if ACTIVE_BASE_URL:
 
-            if attempt < retries - 1:
-                time.sleep(2)
+        urls = [ACTIVE_BASE_URL]
+
+        for base in BASE_URLS:
+
+            if base != ACTIVE_BASE_URL:
+                urls.append(base)
+
+    else:
+
+        urls = BASE_URLS.copy()
+
+
+    # --------------------------------------------------------
+    # Har base URL try karo
+    # --------------------------------------------------------
+
+    for base_url in urls:
+
+        url = base_url + endpoint
+
+        for attempt in range(retries):
+
+            try:
+
+                response = SESSION.get(
+                    url,
+                    params=params,
+                    timeout=15
+                )
+
+                # ------------------------------------------------
+                # Success
+                # ------------------------------------------------
+
+                if response.status_code == 200:
+
+                    ACTIVE_BASE_URL = base_url
+
+                    return response.json()
+
+
+                # ------------------------------------------------
+                # Binance region/access restriction
+                # ------------------------------------------------
+
+                if response.status_code == 451:
+
+                    print(
+                        f"[WARN] 451 blocked: {base_url}"
+                    )
+
+                    break
+
+
+                # ------------------------------------------------
+                # Forbidden
+                # ------------------------------------------------
+
+                if response.status_code == 403:
+
+                    print(
+                        f"[WARN] 403 forbidden: {base_url}"
+                    )
+
+                    break
+
+
+                # ------------------------------------------------
+                # Rate limit
+                # ------------------------------------------------
+
+                if response.status_code == 429:
+
+                    print(
+                        f"[WARN] 429 rate limit: {base_url}"
+                    )
+
+                    time.sleep(3)
+
+                    continue
+
+
+                # ------------------------------------------------
+                # Server error
+                # ------------------------------------------------
+
+                if response.status_code >= 500:
+
+                    print(
+                        f"[WARN] Binance server error "
+                        f"{response.status_code}: {base_url}"
+                    )
+
+                    time.sleep(2)
+
+                    continue
+
+
+                # ------------------------------------------------
+                # Other HTTP error
+                # ------------------------------------------------
+
+                print(
+                    f"[WARN] Binance HTTP "
+                    f"{response.status_code}: {url}"
+                )
+
+                break
+
+
+            except requests.exceptions.Timeout:
+
+                print(
+                    f"[WARN] Timeout: {base_url} "
+                    f"(attempt {attempt + 1}/{retries})"
+                )
+
+                time.sleep(1)
+
+
+            except requests.exceptions.RequestException as error:
+
+                print(
+                    f"[WARN] Request error: "
+                    f"{base_url} - {error}"
+                )
+
+                time.sleep(1)
+
+
+            except Exception as error:
+
+                print(
+                    f"[WARN] Unexpected API error: "
+                    f"{error}"
+                )
+
+                break
+
+
+    # --------------------------------------------------------
+    # Sab endpoints fail
+    # --------------------------------------------------------
+
+    print(
+        "[ERROR] Binance Futures API ke "
+        "kisi bhi endpoint se data nahi mila."
+    )
 
     return None
+
+
+# ============================================================
+# TEST BINANCE FUTURES CONNECTION
+# ============================================================
+
+def test_connection():
+    """
+    Binance Futures connectivity test.
+    """
+
+    data = binance_request(
+        "/fapi/v1/ping"
+    )
+
+    if data is not None:
+
+        print(
+            f"[OK] Binance Futures connected: "
+            f"{ACTIVE_BASE_URL}"
+        )
+
+        return True
+
+    print(
+        "[ERROR] Binance Futures connection failed."
+    )
+
+    return False
 
 
 # ============================================================
@@ -53,18 +264,32 @@ def binance_request(endpoint, params=None, retries=3):
 # ============================================================
 
 def get_usdt_symbols():
+
     """
-    Binance USDT-M Futures ke active USDT symbols return karta hai.
+    Active Binance USD-M USDT perpetual futures
+    symbols return karta hai.
     """
 
-    data = binance_request("/fapi/v1/exchangeInfo")
+    data = binance_request(
+        "/fapi/v1/exchangeInfo"
+    )
 
     if not data:
+
+        print(
+            "[ERROR] exchangeInfo data nahi mila."
+        )
+
         return []
+
 
     symbols = []
 
-    for item in data.get("symbols", []):
+
+    for item in data.get(
+        "symbols",
+        []
+    ):
 
         try:
 
@@ -79,7 +304,15 @@ def get_usdt_symbols():
                 )
 
         except Exception:
+
             continue
+
+
+    print(
+        f"[OK] Found {len(symbols)} "
+        f"USDT Futures perpetual pairs"
+    )
+
 
     return symbols
 
@@ -88,36 +321,66 @@ def get_usdt_symbols():
 # GET 24H TICKERS
 # ============================================================
 
-def get_24h_tickers(symbols=None):
+def get_24h_tickers(
+    symbols=None
+):
+
     """
-    Binance Futures ke 24H ticker data ko DataFrame me return karta hai.
+    Binance Futures 24H ticker data
+    DataFrame ke form mein return karta hai.
     """
 
-    data = binance_request("/fapi/v1/ticker/24hr")
+    data = binance_request(
+        "/fapi/v1/ticker/24hr"
+    )
 
     if not data:
+
+        print(
+            "[ERROR] 24H ticker data nahi mila."
+        )
+
         return pd.DataFrame()
+
+
+    allowed_symbols = None
+
+    if symbols:
+
+        allowed_symbols = set(
+            symbols
+        )
+
 
     rows = []
 
-    allowed_symbols = set(symbols) if symbols else None
 
     for item in data:
 
         try:
 
-            symbol = item.get("symbol")
+            symbol = item.get(
+                "symbol"
+            )
 
-            if allowed_symbols is not None:
-                if symbol not in allowed_symbols:
-                    continue
+
+            if (
+                allowed_symbols is not None
+                and symbol not in allowed_symbols
+            ):
+
+                continue
+
 
             rows.append(
                 {
                     "symbol": symbol,
 
                     "lastPrice": float(
-                        item.get("lastPrice", 0)
+                        item.get(
+                            "lastPrice",
+                            0
+                        )
                     ),
 
                     "priceChangePercent": float(
@@ -164,20 +427,25 @@ def get_24h_tickers(symbols=None):
                 }
             )
 
+
         except Exception as error:
 
             print(
-                f"[WARN] Ticker parse failed: {error}"
+                f"[WARN] Ticker parse failed: "
+                f"{error}"
             )
 
             continue
 
+
     if not rows:
+
         return pd.DataFrame()
 
-    df = pd.DataFrame(rows)
 
-    return df
+    return pd.DataFrame(
+        rows
+    )
 
 
 # ============================================================
@@ -189,8 +457,9 @@ def get_klines(
     interval="15m",
     limit=100
 ):
+
     """
-    Kisi symbol ke historical candles return karta hai.
+    Binance Futures historical candles.
     """
 
     data = binance_request(
@@ -202,8 +471,16 @@ def get_klines(
         }
     )
 
+
     if not data:
+
+        print(
+            f"[WARN] Kline data nahi mila: "
+            f"{symbol}"
+        )
+
         return pd.DataFrame()
+
 
     columns = [
         "open_time",
@@ -220,12 +497,14 @@ def get_klines(
         "ignore",
     ]
 
+
     try:
 
         df = pd.DataFrame(
             data,
             columns=columns
         )
+
 
         numeric_columns = [
             "open",
@@ -236,6 +515,7 @@ def get_klines(
             "quote_volume",
         ]
 
+
         for column in numeric_columns:
 
             df[column] = pd.to_numeric(
@@ -243,7 +523,9 @@ def get_klines(
                 errors="coerce"
             )
 
+
         return df
+
 
     except Exception as error:
 
@@ -253,3 +535,8 @@ def get_klines(
         )
 
         return pd.DataFrame()
+
+
+# ============================================================
+# END
+# ============================================================
