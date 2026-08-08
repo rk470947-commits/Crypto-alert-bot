@@ -1,15 +1,14 @@
 # ============================================================
 # binance_data.py
 # ------------------------------------------------------------
-# Binance USD-M Futures market data
+# FREE FUTURES MARKET DATA
 #
-# Primary endpoint:
-#   fapi.binance.com
+# Binance API GitHub Actions se 451 de raha tha.
+# Isliye ab Bybit USDT Perpetual public API use kar rahe hain.
 #
-# Failover:
-#   fapi1.binance.com
-#   fapi2.binance.com
-#   fapi3.binance.com
+# NOTE:
+# File name "binance_data.py" abhi same rakha gaya hai
+# taaki main.py ke imports change na karne pade.
 # ============================================================
 
 import time
@@ -18,301 +17,187 @@ import pandas as pd
 
 
 # ============================================================
-# BINANCE FUTURES ENDPOINTS
+# BYBIT API
 # ============================================================
 
-BASE_URLS = [
-    "https://fapi.binance.com",
-    "https://fapi1.binance.com",
-    "https://fapi2.binance.com",
-    "https://fapi3.binance.com",
-]
+BASE_URL = "https://api.bybit.com"
 
-
-# Currently working endpoint
-ACTIVE_BASE_URL = None
+CATEGORY = "linear"
 
 
 # ============================================================
-# SESSION
+# HTTP SESSION
 # ============================================================
 
 SESSION = requests.Session()
 
 SESSION.headers.update(
     {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/131.0 Safari/537.36"
-        ),
+        "User-Agent": "Crypto-Futures-Scanner/1.0",
         "Accept": "application/json",
     }
 )
 
 
 # ============================================================
-# BINANCE REQUEST
+# API REQUEST
 # ============================================================
 
-def binance_request(
+def bybit_request(
     endpoint,
     params=None,
-    retries=2
+    retries=3
 ):
     """
-    Binance Futures API request.
+    Bybit public API request.
 
-    Agar ek endpoint 451/403/5xx de,
-    to automatically next endpoint try karega.
+    Public market-data endpoints ke liye API key
+    ki zarurat nahi hai.
     """
 
-    global ACTIVE_BASE_URL
+    url = BASE_URL + endpoint
 
-    # --------------------------------------------------------
-    # Agar pehle koi endpoint successfully kaam kar chuka hai
-    # to usko pehle try karo.
-    # --------------------------------------------------------
+    for attempt in range(1, retries + 1):
 
-    if ACTIVE_BASE_URL:
+        try:
 
-        urls = [ACTIVE_BASE_URL]
+            response = SESSION.get(
+                url,
+                params=params,
+                timeout=20
+            )
 
-        for base in BASE_URLS:
+            response.raise_for_status()
 
-            if base != ACTIVE_BASE_URL:
-                urls.append(base)
+            data = response.json()
 
-    else:
+            ret_code = data.get(
+                "retCode",
+                -1
+            )
 
-        urls = BASE_URLS.copy()
+            if ret_code != 0:
 
-
-    # --------------------------------------------------------
-    # Har base URL try karo
-    # --------------------------------------------------------
-
-    for base_url in urls:
-
-        url = base_url + endpoint
-
-        for attempt in range(retries):
-
-            try:
-
-                response = SESSION.get(
-                    url,
-                    params=params,
-                    timeout=15
+                print(
+                    f"[WARN] Bybit API error: "
+                    f"{data.get('retMsg', 'Unknown error')}"
                 )
 
-                # ------------------------------------------------
-                # Success
-                # ------------------------------------------------
-
-                if response.status_code == 200:
-
-                    ACTIVE_BASE_URL = base_url
-
-                    return response.json()
-
-
-                # ------------------------------------------------
-                # Binance region/access restriction
-                # ------------------------------------------------
-
-                if response.status_code == 451:
-
-                    print(
-                        f"[WARN] 451 blocked: {base_url}"
-                    )
-
-                    break
-
-
-                # ------------------------------------------------
-                # Forbidden
-                # ------------------------------------------------
-
-                if response.status_code == 403:
-
-                    print(
-                        f"[WARN] 403 forbidden: {base_url}"
-                    )
-
-                    break
-
-
-                # ------------------------------------------------
-                # Rate limit
-                # ------------------------------------------------
-
-                if response.status_code == 429:
-
-                    print(
-                        f"[WARN] 429 rate limit: {base_url}"
-                    )
-
-                    time.sleep(3)
-
-                    continue
-
-
-                # ------------------------------------------------
-                # Server error
-                # ------------------------------------------------
-
-                if response.status_code >= 500:
-
-                    print(
-                        f"[WARN] Binance server error "
-                        f"{response.status_code}: {base_url}"
-                    )
-
+                if attempt < retries:
                     time.sleep(2)
 
                     continue
 
+                return None
 
-                # ------------------------------------------------
-                # Other HTTP error
-                # ------------------------------------------------
+            return data
 
-                print(
-                    f"[WARN] Binance HTTP "
-                    f"{response.status_code}: {url}"
-                )
+        except requests.exceptions.RequestException as error:
 
-                break
+            print(
+                f"[WARN] Bybit connection error "
+                f"(attempt {attempt}/{retries}): "
+                f"{error}"
+            )
 
+            if attempt < retries:
+                time.sleep(2)
 
-            except requests.exceptions.Timeout:
+        except Exception as error:
 
-                print(
-                    f"[WARN] Timeout: {base_url} "
-                    f"(attempt {attempt + 1}/{retries})"
-                )
+            print(
+                f"[WARN] Unexpected Bybit error: "
+                f"{error}"
+            )
 
-                time.sleep(1)
-
-
-            except requests.exceptions.RequestException as error:
-
-                print(
-                    f"[WARN] Request error: "
-                    f"{base_url} - {error}"
-                )
-
-                time.sleep(1)
-
-
-            except Exception as error:
-
-                print(
-                    f"[WARN] Unexpected API error: "
-                    f"{error}"
-                )
-
-                break
-
-
-    # --------------------------------------------------------
-    # Sab endpoints fail
-    # --------------------------------------------------------
-
-    print(
-        "[ERROR] Binance Futures API ke "
-        "kisi bhi endpoint se data nahi mila."
-    )
+            return None
 
     return None
 
 
 # ============================================================
-# TEST BINANCE FUTURES CONNECTION
-# ============================================================
-
-def test_connection():
-    """
-    Binance Futures connectivity test.
-    """
-
-    data = binance_request(
-        "/fapi/v1/ping"
-    )
-
-    if data is not None:
-
-        print(
-            f"[OK] Binance Futures connected: "
-            f"{ACTIVE_BASE_URL}"
-        )
-
-        return True
-
-    print(
-        "[ERROR] Binance Futures connection failed."
-    )
-
-    return False
-
-
-# ============================================================
-# GET USDT FUTURES SYMBOLS
+# GET USDT PERPETUAL SYMBOLS
 # ============================================================
 
 def get_usdt_symbols():
-
     """
-    Active Binance USD-M USDT perpetual futures
-    symbols return karta hai.
+    Bybit ke active USDT perpetual symbols return karta hai.
+
+    Bybit category=linear:
+    USDT/USDC derivatives ko cover karta hai.
+    Hum sirf USDT perpetual contracts lenge.
     """
-
-    data = binance_request(
-        "/fapi/v1/exchangeInfo"
-    )
-
-    if not data:
-
-        print(
-            "[ERROR] exchangeInfo data nahi mila."
-        )
-
-        return []
-
 
     symbols = []
 
+    cursor = None
 
-    for item in data.get(
-        "symbols",
-        []
-    ):
+    while True:
 
-        try:
+        params = {
+            "category": CATEGORY,
+            "limit": 1000,
+        }
 
-            if (
-                item.get("quoteAsset") == "USDT"
-                and item.get("status") == "TRADING"
-                and item.get("contractType") == "PERPETUAL"
-            ):
+        if cursor:
+            params["cursor"] = cursor
 
-                symbols.append(
-                    item["symbol"]
-                )
+        data = bybit_request(
+            "/v5/market/instruments-info",
+            params=params
+        )
 
-        except Exception:
+        if not data:
+            break
 
-            continue
+        result = data.get(
+            "result",
+            {}
+        )
 
+        items = result.get(
+            "list",
+            []
+        )
+
+        for item in items:
+
+            try:
+
+                if (
+                    item.get("status") == "Trading"
+                    and item.get("contractType")
+                    == "LinearPerpetual"
+                    and item.get("quoteCoin")
+                    == "USDT"
+                    and item.get("settleCoin")
+                    == "USDT"
+                ):
+
+                    symbols.append(
+                        item["symbol"]
+                    )
+
+            except Exception:
+
+                continue
+
+        cursor = result.get(
+            "nextPageCursor"
+        )
+
+        if not cursor:
+            break
+
+    # Remove duplicates
+    symbols = list(
+        dict.fromkeys(symbols)
+    )
 
     print(
         f"[OK] Found {len(symbols)} "
-        f"USDT Futures perpetual pairs"
+        f"Bybit USDT perpetual pairs"
     )
-
 
     return symbols
 
@@ -324,20 +209,43 @@ def get_usdt_symbols():
 def get_24h_tickers(
     symbols=None
 ):
-
     """
-    Binance Futures 24H ticker data
-    DataFrame ke form mein return karta hai.
+    Bybit linear futures ke 24H ticker data ko
+    same column names mein return karta hai
+    jo main.py expect karta hai.
     """
 
-    data = binance_request(
-        "/fapi/v1/ticker/24hr"
+    data = bybit_request(
+        "/v5/market/tickers",
+        params={
+            "category": CATEGORY
+        }
     )
 
     if not data:
 
         print(
-            "[ERROR] 24H ticker data nahi mila."
+            "[ERROR] Bybit 24H ticker data nahi mila."
+        )
+
+        return pd.DataFrame()
+
+
+    result = data.get(
+        "result",
+        {}
+    )
+
+    ticker_list = result.get(
+        "list",
+        []
+    )
+
+
+    if not ticker_list:
+
+        print(
+            "[ERROR] Bybit ticker list empty hai."
         )
 
         return pd.DataFrame()
@@ -355,7 +263,7 @@ def get_24h_tickers(
     rows = []
 
 
-    for item in data:
+    for item in ticker_list:
 
         try:
 
@@ -372,58 +280,81 @@ def get_24h_tickers(
                 continue
 
 
+            # Bybit ticker fields:
+            #
+            # lastPrice
+            # price24hPcnt
+            # turnover24h
+            # volume24h
+
+
+            last_price = float(
+                item.get(
+                    "lastPrice",
+                    0
+                )
+            )
+
+
+            price_change_pct = (
+                float(
+                    item.get(
+                        "price24hPcnt",
+                        0
+                    )
+                )
+                * 100
+            )
+
+
+            quote_volume = float(
+                item.get(
+                    "turnover24h",
+                    0
+                )
+            )
+
+
+            base_volume = float(
+                item.get(
+                    "volume24h",
+                    0
+                )
+            )
+
+
             rows.append(
                 {
                     "symbol": symbol,
 
-                    "lastPrice": float(
-                        item.get(
-                            "lastPrice",
-                            0
-                        )
-                    ),
+                    "lastPrice": last_price,
 
-                    "priceChangePercent": float(
-                        item.get(
-                            "priceChangePercent",
-                            0
-                        )
-                    ),
+                    "priceChangePercent":
+                        price_change_pct,
 
-                    "quoteVolume": float(
-                        item.get(
-                            "quoteVolume",
-                            0
-                        )
-                    ),
+                    "quoteVolume":
+                        quote_volume,
 
-                    "count": int(
-                        item.get(
-                            "count",
-                            0
-                        )
-                    ),
+                    # Bybit ticker response mein
+                    # Binance jaisa trade count nahi hai.
+                    # Isliye safe default use kar rahe hain.
+                    "count": 0,
 
                     "highPrice": float(
                         item.get(
-                            "highPrice",
+                            "highPrice24h",
                             0
                         )
                     ),
 
                     "lowPrice": float(
                         item.get(
-                            "lowPrice",
+                            "lowPrice24h",
                             0
                         )
                     ),
 
-                    "volume": float(
-                        item.get(
-                            "volume",
-                            0
-                        )
-                    ),
+                    "volume": base_volume,
                 }
             )
 
@@ -443,13 +374,22 @@ def get_24h_tickers(
         return pd.DataFrame()
 
 
-    return pd.DataFrame(
+    df = pd.DataFrame(
         rows
     )
 
 
+    print(
+        f"[OK] Received 24H data for "
+        f"{len(df)} symbols"
+    )
+
+
+    return df
+
+
 # ============================================================
-# GET KLINES
+# GET 15-MINUTE KLINES
 # ============================================================
 
 def get_klines(
@@ -457,17 +397,50 @@ def get_klines(
     interval="15m",
     limit=100
 ):
-
     """
-    Binance Futures historical candles.
+    Bybit Futures historical candles.
+
+    Main.py/scoring.py ke liye Binance-compatible
+    DataFrame columns return karta hai.
     """
 
-    data = binance_request(
-        "/fapi/v1/klines",
+    # --------------------------------------------------------
+    # Binance-style interval ko Bybit interval mein convert
+    # --------------------------------------------------------
+
+    interval_map = {
+        "1m": "1",
+        "3m": "3",
+        "5m": "5",
+        "15m": "15",
+        "30m": "30",
+        "1h": "60",
+        "2h": "120",
+        "4h": "240",
+        "6h": "360",
+        "12h": "720",
+        "1d": "D",
+        "1w": "W",
+        "1M": "M",
+    }
+
+
+    bybit_interval = interval_map.get(
+        interval,
+        interval
+    )
+
+
+    data = bybit_request(
+        "/v5/market/kline",
         params={
+            "category": CATEGORY,
             "symbol": symbol,
-            "interval": interval,
-            "limit": limit,
+            "interval": bybit_interval,
+            "limit": min(
+                int(limit),
+                1000
+            ),
         }
     )
 
@@ -482,59 +455,193 @@ def get_klines(
         return pd.DataFrame()
 
 
-    columns = [
-        "open_time",
+    result = data.get(
+        "result",
+        {}
+    )
+
+
+    candle_list = result.get(
+        "list",
+        []
+    )
+
+
+    if not candle_list:
+
+        return pd.DataFrame()
+
+
+    # Bybit response:
+    #
+    # [startTime,
+    #  open,
+    #  high,
+    #  low,
+    #  close,
+    #  volume,
+    #  turnover]
+    #
+    # Response reverse chronological order mein hota hai.
+    # Hum oldest -> newest karenge.
+
+
+    candle_list = list(
+        reversed(candle_list)
+    )
+
+
+    rows = []
+
+
+    for candle in candle_list:
+
+        try:
+
+            if len(candle) < 7:
+                continue
+
+
+            open_time = int(
+                candle[0]
+            )
+
+            open_price = float(
+                candle[1]
+            )
+
+            high_price = float(
+                candle[2]
+            )
+
+            low_price = float(
+                candle[3]
+            )
+
+            close_price = float(
+                candle[4]
+            )
+
+            volume = float(
+                candle[5]
+            )
+
+            quote_volume = float(
+                candle[6]
+            )
+
+
+            rows.append(
+                {
+                    "open_time":
+                        open_time,
+
+                    "open":
+                        open_price,
+
+                    "high":
+                        high_price,
+
+                    "low":
+                        low_price,
+
+                    "close":
+                        close_price,
+
+                    "volume":
+                        volume,
+
+                    "close_time":
+                        open_time,
+
+                    "quote_volume":
+                        quote_volume,
+
+                    "trades":
+                        0,
+
+                    "taker_buy_base":
+                        0,
+
+                    "taker_buy_quote":
+                        0,
+
+                    "ignore":
+                        0,
+                }
+            )
+
+
+        except Exception as error:
+
+            print(
+                f"[WARN] Candle parse failed "
+                f"for {symbol}: {error}"
+            )
+
+            continue
+
+
+    if not rows:
+
+        return pd.DataFrame()
+
+
+    df = pd.DataFrame(
+        rows
+    )
+
+
+    numeric_columns = [
         "open",
         "high",
         "low",
         "close",
         "volume",
-        "close_time",
         "quote_volume",
-        "trades",
-        "taker_buy_base",
-        "taker_buy_quote",
-        "ignore",
     ]
 
 
-    try:
+    for column in numeric_columns:
 
-        df = pd.DataFrame(
-            data,
-            columns=columns
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce"
         )
 
 
-        numeric_columns = [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "quote_volume",
-        ]
+    return df
 
 
-        for column in numeric_columns:
+# ============================================================
+# CONNECTION TEST
+# ============================================================
 
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            )
+def test_connection():
+
+    """
+    Simple Bybit public API connection test.
+    """
+
+    data = bybit_request(
+        "/v5/market/time"
+    )
 
 
-        return df
-
-
-    except Exception as error:
+    if data:
 
         print(
-            f"[WARN] Kline parsing failed "
-            f"for {symbol}: {error}"
+            "[OK] Bybit Futures API connected."
         )
 
-        return pd.DataFrame()
+        return True
+
+
+    print(
+        "[ERROR] Bybit Futures API connection failed."
+    )
+
+    return False
 
 
 # ============================================================
